@@ -16,7 +16,7 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-from meals import DAYS, BASE_CALS
+from meals import DAYS, BASE_CALS, SHOPPING_LIST
 
 # ─── Логирование ──────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -91,8 +91,143 @@ def build_day_keyboard(active_day: int) -> InlineKeyboardMarkup:
             row = []
     if row:
         buttons.append(row)
+    buttons.append([InlineKeyboardButton("🛒 Список продуктов на неделю", callback_data="grocery")])
     buttons.append([InlineKeyboardButton("🔄 Пересчитать", callback_data="restart")])
     return InlineKeyboardMarkup(buttons)
+
+
+def normalize_name(name: str) -> tuple[str, str]:
+    """
+    Возвращает (нормализованное_имя, категория).
+    Объединяет похожие ингредиенты под одним ключом.
+    """
+    n = name.lower().strip()
+    n = re.sub(r"\(.*?\)", "", n).strip()   # убираем скобки
+    n = re.sub(r"\s+", " ", n)
+
+    # Яйца
+    if re.search(r"яйц|яйцо", n):
+        return "Яйца", "🥚 Яйца и молочное"
+    # Творог
+    if "творог" in n:
+        return "Творог", "🥚 Яйца и молочное"
+    # Молоко / вода или молоко
+    if "молоко" in n or n == "вода или молоко":
+        return "Молоко", "🥚 Яйца и молочное"
+    # Масло сливочное
+    if "масло сливочное" in n or "сливочное масло" in n:
+        return "Масло сливочное", "🥚 Яйца и молочное"
+    # Сметана
+    if "сметан" in n:
+        return "Сметана", "🥚 Яйца и молочное"
+    # Рис
+    if n.startswith("рис"):
+        return "Рис", "🌾 Крупы и макароны"
+    # Гречка
+    if "гречк" in n:
+        return "Гречка", "🌾 Крупы и макароны"
+    # Овсянка
+    if "овсян" in n:
+        return "Овсяные хлопья", "🌾 Крупы и макароны"
+    # Макароны
+    if "макарон" in n:
+        return "Макароны", "🌾 Крупы и макароны"
+    # Хлеб (включая замоченный)
+    if "хлеб" in n:
+        return "Хлеб", "🍞 Хлеб"
+    # Картофель
+    if "картоф" in n or "картошк" in n:
+        return "Картофель", "🥔 Овощи"
+    # Лук
+    if re.match(r"^лук", n):
+        return "Лук репчатый", "🥔 Овощи"
+    # Морковь
+    if re.match(r"^морковь", n) or re.match(r"^морков", n):
+        return "Морковь", "🥔 Овощи"
+    # Капуста
+    if "капуст" in n:
+        return "Капуста", "🥔 Овощи"
+    # Чеснок
+    if "чеснок" in n:
+        return "Чеснок", "🥔 Овощи"
+    # Банан
+    if "банан" in n:
+        return "Бананы", "🫙 Прочее"
+    # Томатная паста
+    if "томатн" in n:
+        return "Томатная паста", "🫙 Прочее"
+    # Вода
+    if n == "вода":
+        return "Вода", "🫙 Прочее"
+
+    return name.strip().capitalize(), "🫙 Прочее"
+
+
+def build_grocery_list(cal: dict) -> str:
+    """Список продуктов на 7 дней, сгруппированный по категориям."""
+    scale = cal["target"] / BASE_CALS
+
+    FIXED = {
+        "🐔 Курица (если выбрал курицу)": [
+            ("Куриное филе / грудка",    round(870  * scale), "г"),
+            ("Куриное бедро без кости",  round(530  * scale), "г"),
+            ("Куриный фарш",             round(200  * scale), "г"),
+        ],
+        "🥩 Говядина (если выбрал мясо)": [
+            ("Говядина (нарезка)",       round(775  * scale), "г"),
+            ("Говяжий фарш",             round(150  * scale), "г"),
+        ],
+        "🥚 Яйца и молочное": [
+            ("Яйца",                     round(30   * scale), "шт"),
+            ("Творог 5–9%",              round(700  * scale), "г"),
+            ("Масло сливочное",          round(150  * scale), "г"),
+            ("Сметана (по желанию)",     round(100  * scale), "г"),
+        ],
+        "🌾 Крупы и макароны": [
+            ("Рис белый",                round(380  * scale), "г"),
+            ("Гречка",                   round(440  * scale), "г"),
+            ("Овсяные хлопья",           round(210  * scale), "г"),
+            ("Макароны",                 round(160  * scale), "г"),
+        ],
+        "🥔 Овощи": [
+            ("Картофель",                round(1400 * scale), "г"),
+            ("Лук репчатый",             round(560  * scale), "г"),
+            ("Морковь",                  round(480  * scale), "г"),
+            ("Капуста белокочанная",     round(300  * scale), "г"),
+            ("Чеснок",                   2,                    "головки"),
+        ],
+        "🍌 Фрукты": [
+            ("Бананы",                   2,                    "шт"),
+        ],
+        "🍞 Хлеб и базовые продукты": [
+            ("Хлеб",                     1,                    "буханка"),
+            ("Томатная паста",           round(60   * scale), "г"),
+            ("Масло растительное",       round(200  * scale), "мл"),
+            ("Соль",                     1,                    "пачка"),
+            ("Перец чёрный молотый",     1,                    "пачка"),
+            ("Лавровый лист",            1,                    "пачка"),
+            ("Паприка молотая",          1,                    "пачка"),
+        ],
+    }
+
+    lines = [
+        f"🛒 *Список продуктов на 7 дней*",
+        f"_Норма: {cal['target']} ккал/день_\n",
+    ]
+
+    for category, items in FIXED.items():
+        lines.append(f"*{category}*")
+        for name, amount, unit in items:
+            if unit == "г" and amount >= 1000:
+                kg = round(amount / 1000, 1)
+                lines.append(f"  • {name} — *{amount} г* (~{kg} кг)")
+            else:
+                lines.append(f"  • {name} — *{amount} {unit}*")
+        lines.append("")
+
+    lines.append("_⚠️ Покупай курицу ИЛИ говядину — не оба сразу_")
+    lines.append("_💡 Специи и масло — смотри что есть дома_")
+    return "\n".join(lines)
 
 
 def format_day(day_index: int, cal: dict) -> str:
@@ -285,6 +420,34 @@ async def show_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return ASK_NAME
 
+    if query.data == "grocery":
+        cal = context.user_data.get("cal")
+        if not cal:
+            await query.answer("Сначала пройди опрос /start", show_alert=True)
+            return SHOW_PLAN
+        text = build_grocery_list(cal)
+        back_kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("← Назад к меню", callback_data="day_0")
+        ]])
+        if len(text) > 4000:
+            parts = []
+            current = ""
+            for line in text.split("\n"):
+                if len(current) + len(line) + 1 > 4000:
+                    parts.append(current)
+                    current = line + "\n"
+                else:
+                    current += line + "\n"
+            if current:
+                parts.append(current)
+            await query.edit_message_text(parts[0], parse_mode="Markdown", reply_markup=None)
+            for part in parts[1:-1]:
+                await query.message.reply_text(part, parse_mode="Markdown")
+            await query.message.reply_text(parts[-1], parse_mode="Markdown", reply_markup=back_kb)
+        else:
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=back_kb)
+        return SHOW_PLAN
+
     day_index = int(query.data.split("_")[1])
     cal = context.user_data.get("cal")
     if not cal:
@@ -360,7 +523,7 @@ def main() -> None:
             ASK_WEIGHT:   [MessageHandler(filters.TEXT & ~filters.COMMAND, got_weight)],
             ASK_ACTIVITY: [CallbackQueryHandler(got_activity, pattern=r"^act_")],
             ASK_GOAL:     [CallbackQueryHandler(got_goal, pattern=r"^goal_")],
-            SHOW_PLAN:    [CallbackQueryHandler(show_day, pattern=r"^(day_\d+|restart)$")],
+            SHOW_PLAN:    [CallbackQueryHandler(show_day, pattern=r"^(day_\d+|restart|grocery)$")],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         allow_reentry=True,
